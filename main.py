@@ -14,93 +14,107 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 
 CALENDAR_LINK = "https://bookwithmisscandynow.as.me/"
 
-# Simple in-memory state (fast + clean)
+# ---------------- STATE ----------------
 user_state = {}
 
-# ---------- START ----------
+# ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    user_state[uid] = {}
+    user_state[uid] = {"stage": "age"}
 
     await update.message.reply_text(
         "💎 Welcome.\n\n"
         "You’ve reached Miss Candy’s private booking assistant — "
         "this is the only place to access me directly.\n\n"
-        "I’m selective by design. Not everyone gets through, "
-        "but those who do are always glad they continued.\n\n"
-        "This assistant will guide you through a short screening, "
-        "then allow you to request time with me, explore exclusive content, "
-        "or secure a more personal experience.\n\n"
-        "Everything here is discreet, intentional, and handled properly.\n\n"
+        "I’m selective by design. Not everyone gets through.\n\n"
         "Let’s begin.\n\n"
         "How old are you? (18+ only)"
     )
 
-# ---------- TEXT HANDLER ----------
+# ---------------- TEXT FLOW ----------------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text.strip()
     data = user_state.setdefault(uid, {})
+    stage = data.get("stage")
 
-    if "age" not in data:
+    # ---- SCREENING ----
+    if stage == "age":
         if not text.isdigit() or int(text) < 18:
             await update.message.reply_text("You must be 18+ to continue.")
             return
         data["age"] = text
+        data["stage"] = "height"
         await update.message.reply_text("Height?")
         return
 
-    if "height" not in data:
+    if stage == "height":
         data["height"] = text
+        data["stage"] = "ethnicity"
         await update.message.reply_text("Ethnicity?")
         return
 
-    if "ethnicity" not in data:
+    if stage == "ethnicity":
         data["ethnicity"] = text
+        data["stage"] = "gender"
         await update.message.reply_text("Gender?")
         return
 
-    if "gender" not in data:
+    if stage == "gender":
         data["gender"] = text
+        data["stage"] = "selfie"
         await update.message.reply_text("Please send a clear selfie.")
         return
 
-    # Booking info AFTER selfie
-    if "selfie" in data:
-        if "date" not in data:
-            data["date"] = text
-            await update.message.reply_text("Desired date? (YYYY-MM-DD)")
-            return
+    # ---- BOOKING ----
+    if stage == "date":
+        data["date"] = text
+        data["stage"] = "time"
+        await update.message.reply_text("Desired time? (e.g. 7pm or ASAP)")
+        return
 
-        if "time" not in data:
-            data["time"] = text
-            await update.message.reply_text("Desired time?")
-            return
+    if stage == "time":
+        data["time"] = text
+        data["stage"] = "duration"
+        await update.message.reply_text("Duration? (e.g. 1 hour)")
+        return
 
-        if "duration" not in data:
-            data["duration"] = text
-            await update.message.reply_text("Duration?")
-            return
+    if stage == "duration":
+        data["duration"] = text
+        data["stage"] = "location"
+        await update.message.reply_text(
+            "Incall or outcall? If outcall, which city?"
+        )
+        return
 
-        if "location" not in data:
-            data["location"] = text
-            await send_to_admin(update, context)
-            await update.message.reply_text(
-                "Thank you.\n\n"
-                "📅 Please select a time slot here:\n"
-                f"{CALENDAR_LINK}\n\n"
-                "Your request is pending approval."
-            )
-            return
+    if stage == "location":
+        data["location"] = text
+        data["stage"] = "done"
 
-# ---------- PHOTO HANDLER ----------
+        await send_to_admin(update, context)
+
+        await update.message.reply_text(
+            "Thank you.\n\n"
+            "📅 Please select a time slot here:\n"
+            f"{CALENDAR_LINK}\n\n"
+            "Your request is pending approval."
+        )
+        return
+
+# ---------------- PHOTO ----------------
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     data = user_state.setdefault(uid, {})
+
+    if data.get("stage") != "selfie":
+        return
+
     data["selfie"] = update.message.photo[-1].file_id
+    data["stage"] = "date"
+
     await update.message.reply_text("Desired date? (YYYY-MM-DD)")
 
-# ---------- ADMIN KEYBOARD ----------
+# ---------------- ADMIN ----------------
 def admin_keyboard(uid):
     return InlineKeyboardMarkup([
         [
@@ -109,13 +123,12 @@ def admin_keyboard(uid):
         ]
     ])
 
-# ---------- SEND TO ADMIN ----------
 async def send_to_admin(update, context):
     uid = update.effective_user.id
     d = user_state[uid]
 
     summary = (
-        "📥 NEW REQUEST\n\n"
+        "📥 NEW BOOKING REQUEST\n\n"
         f"Age: {d['age']}\n"
         f"Height: {d['height']}\n"
         f"Ethnicity: {d['ethnicity']}\n"
@@ -132,7 +145,6 @@ async def send_to_admin(update, context):
         reply_markup=admin_keyboard(uid)
     )
 
-# ---------- APPROVE / DENY ----------
 async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -146,19 +158,18 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=(
                 "💋 You’re approved.\n\n"
                 "Finalize your booking here:\n"
-                f"{CALENDAR_LINK}\n\n"
-                "Payment details will be provided after confirmation."
+                f"{CALENDAR_LINK}"
             )
         )
-        await query.edit_message_text("✅ Approved & calendar sent.")
+        await query.edit_message_text("✅ Approved")
     else:
         await context.bot.send_message(
             chat_id=uid,
             text="Not a match at this time."
         )
-        await query.edit_message_text("❌ Denied.")
+        await query.edit_message_text("❌ Denied")
 
-# ---------- CONTENT MENU ----------
+# ---------------- MENU ----------------
 async def content_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔥 MISS CANDY — PRIVATE MENU 🔥\n\n"
@@ -170,11 +181,10 @@ async def content_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💸 Payment Methods:\n"
         "Cash App: $obeymisscandy\n"
         "Venmo: spoilmisscandyrotten\n"
-        "Crypto: available via Telegram\n\n"
-        "Reply with what you’d like 💋"
+        "Crypto: available via Telegram"
     )
 
-# ---------- MAIN ----------
+# ---------------- MAIN ----------------
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
